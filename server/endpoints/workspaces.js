@@ -1,7 +1,12 @@
 const path = require("path");
 const fs = require("fs");
-const { reqBody, multiUserMode, userFromSession } = require("../utils/http");
-const { normalizePath } = require("../utils/files");
+const {
+  reqBody,
+  multiUserMode,
+  userFromSession,
+  safeJsonParse,
+} = require("../utils/http");
+const { normalizePath, isWithin } = require("../utils/files");
 const { Workspace } = require("../models/workspace");
 const { Document } = require("../models/documents");
 const { DocumentVectors } = require("../models/vectors");
@@ -25,6 +30,9 @@ const {
   determineWorkspacePfpFilepath,
   fetchPfp,
 } = require("../utils/files/pfp");
+const { getTTSProvider } = require("../utils/TextToSpeech");
+const { WorkspaceThread } = require("../models/workspaceThread");
+const truncate = require("truncate");
 
 function workspaceEndpoints(app) {
   if (!app) return;
@@ -45,7 +53,7 @@ function workspaceEndpoints(app) {
             multiUserMode: multiUserMode(response),
             LLMSelection: process.env.LLM_PROVIDER || "openai",
             Embedder: process.env.EMBEDDING_ENGINE || "inherit",
-            VectorDbSelection: process.env.VECTOR_DB || "pinecone",
+            VectorDbSelection: process.env.VECTOR_DB || "lancedb",
           },
           user?.id
         );
@@ -62,7 +70,7 @@ function workspaceEndpoints(app) {
 
         response.status(200).json({ workspace, message });
       } catch (e) {
-        console.log(e.message, e);
+        console.error(e.message, e);
         response.sendStatus(500).end();
       }
     }
@@ -91,7 +99,7 @@ function workspaceEndpoints(app) {
         );
         response.status(200).json({ workspace, message });
       } catch (e) {
-        console.log(e.message, e);
+        console.error(e.message, e);
         response.sendStatus(500).end();
       }
     }
@@ -105,39 +113,45 @@ function workspaceEndpoints(app) {
       handleFileUpload,
     ],
     async function (request, response) {
-      const Collector = new CollectorApi();
-      const { originalname } = request.file;
-      const processingOnline = await Collector.online();
+      try {
+        const Collector = new CollectorApi();
+        const { originalname } = request.file;
+        const processingOnline = await Collector.online();
 
-      if (!processingOnline) {
-        response
-          .status(500)
-          .json({
-            success: false,
-            error: `Document processing API is not online. Document ${originalname} will not be processed automatically.`,
-          })
-          .end();
-        return;
+        if (!processingOnline) {
+          response
+            .status(500)
+            .json({
+              success: false,
+              error: `Document processing API is not online. Document ${originalname} will not be processed automatically.`,
+            })
+            .end();
+          return;
+        }
+
+        const { success, reason } =
+          await Collector.processDocument(originalname);
+        if (!success) {
+          response.status(500).json({ success: false, error: reason }).end();
+          return;
+        }
+
+        Collector.log(
+          `Document ${originalname} uploaded processed and successfully. It is now available in documents.`
+        );
+        await Telemetry.sendTelemetry("document_uploaded");
+        await EventLogs.logEvent(
+          "document_uploaded",
+          {
+            documentName: originalname,
+          },
+          response.locals?.user?.id
+        );
+        response.status(200).json({ success: true, error: null });
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
       }
-
-      const { success, reason } = await Collector.processDocument(originalname);
-      if (!success) {
-        response.status(500).json({ success: false, error: reason }).end();
-        return;
-      }
-
-      Collector.log(
-        `Document ${originalname} uploaded processed and successfully. It is now available in documents.`
-      );
-      await Telemetry.sendTelemetry("document_uploaded");
-      await EventLogs.logEvent(
-        "document_uploaded",
-        {
-          documentName: originalname,
-        },
-        response.locals?.user?.id
-      );
-      response.status(200).json({ success: true, error: null });
     }
   );
 
@@ -145,37 +159,42 @@ function workspaceEndpoints(app) {
     "/workspace/:slug/upload-link",
     [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
     async (request, response) => {
-      const Collector = new CollectorApi();
-      const { link = "" } = reqBody(request);
-      const processingOnline = await Collector.online();
+      try {
+        const Collector = new CollectorApi();
+        const { link = "" } = reqBody(request);
+        const processingOnline = await Collector.online();
 
-      if (!processingOnline) {
-        response
-          .status(500)
-          .json({
-            success: false,
-            error: `Document processing API is not online. Link ${link} will not be processed automatically.`,
-          })
-          .end();
-        return;
+        if (!processingOnline) {
+          response
+            .status(500)
+            .json({
+              success: false,
+              error: `Document processing API is not online. Link ${link} will not be processed automatically.`,
+            })
+            .end();
+          return;
+        }
+
+        const { success, reason } = await Collector.processLink(link);
+        if (!success) {
+          response.status(500).json({ success: false, error: reason }).end();
+          return;
+        }
+
+        Collector.log(
+          `Link ${link} uploaded processed and successfully. It is now available in documents.`
+        );
+        await Telemetry.sendTelemetry("link_uploaded");
+        await EventLogs.logEvent(
+          "link_uploaded",
+          { link },
+          response.locals?.user?.id
+        );
+        response.status(200).json({ success: true, error: null });
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
       }
-
-      const { success, reason } = await Collector.processLink(link);
-      if (!success) {
-        response.status(500).json({ success: false, error: reason }).end();
-        return;
-      }
-
-      Collector.log(
-        `Link ${link} uploaded processed and successfully. It is now available in documents.`
-      );
-      await Telemetry.sendTelemetry("link_uploaded");
-      await EventLogs.logEvent(
-        "link_uploaded",
-        { link },
-        response.locals?.user?.id
-      );
-      response.status(200).json({ success: true, error: null });
     }
   );
 
@@ -217,7 +236,7 @@ function workspaceEndpoints(app) {
               : null,
         });
       } catch (e) {
-        console.log(e.message, e);
+        console.error(e.message, e);
         response.sendStatus(500).end();
       }
     }
@@ -260,7 +279,7 @@ function workspaceEndpoints(app) {
         }
         response.sendStatus(200).end();
       } catch (e) {
-        console.log(e.message, e);
+        console.error(e.message, e);
         response.sendStatus(500).end();
       }
     }
@@ -301,7 +320,7 @@ function workspaceEndpoints(app) {
         }
         response.sendStatus(200).end();
       } catch (e) {
-        console.log(e.message, e);
+        console.error(e.message, e);
         response.sendStatus(500).end();
       }
     }
@@ -319,7 +338,7 @@ function workspaceEndpoints(app) {
 
         response.status(200).json({ workspaces });
       } catch (e) {
-        console.log(e.message, e);
+        console.error(e.message, e);
         response.sendStatus(500).end();
       }
     }
@@ -338,7 +357,7 @@ function workspaceEndpoints(app) {
 
         response.status(200).json({ workspace });
       } catch (e) {
-        console.log(e.message, e);
+        console.error(e.message, e);
         response.sendStatus(500).end();
       }
     }
@@ -363,10 +382,101 @@ function workspaceEndpoints(app) {
         const history = multiUserMode(response)
           ? await WorkspaceChats.forWorkspaceByUser(workspace.id, user.id)
           : await WorkspaceChats.forWorkspace(workspace.id);
-
         response.status(200).json({ history: convertToChatHistory(history) });
       } catch (e) {
-        console.log(e.message, e);
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  app.delete(
+    "/workspace/:slug/delete-chats",
+    [validatedRequest, flexUserRoleValid([ROLES.all]), validWorkspaceSlug],
+    async (request, response) => {
+      try {
+        const { chatIds = [] } = reqBody(request);
+        const user = await userFromSession(request, response);
+        const workspace = response.locals.workspace;
+
+        if (!workspace || !Array.isArray(chatIds)) {
+          response.sendStatus(400).end();
+          return;
+        }
+
+        // This works for both workspace and threads.
+        // we simplify this by just looking at workspace<>user overlap
+        // since they are all on the same table.
+        await WorkspaceChats.delete({
+          id: { in: chatIds.map((id) => Number(id)) },
+          user_id: user?.id ?? null,
+          workspaceId: workspace.id,
+        });
+
+        response.sendStatus(200).end();
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  app.delete(
+    "/workspace/:slug/delete-edited-chats",
+    [validatedRequest, flexUserRoleValid([ROLES.all]), validWorkspaceSlug],
+    async (request, response) => {
+      try {
+        const { startingId } = reqBody(request);
+        const user = await userFromSession(request, response);
+        const workspace = response.locals.workspace;
+
+        await WorkspaceChats.delete({
+          workspaceId: workspace.id,
+          thread_id: null,
+          user_id: user?.id,
+          id: { gte: Number(startingId) },
+        });
+
+        response.sendStatus(200).end();
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  app.post(
+    "/workspace/:slug/update-chat",
+    [validatedRequest, flexUserRoleValid([ROLES.all]), validWorkspaceSlug],
+    async (request, response) => {
+      try {
+        const { chatId, newText = null } = reqBody(request);
+        if (!newText || !String(newText).trim())
+          throw new Error("Cannot save empty response");
+
+        const user = await userFromSession(request, response);
+        const workspace = response.locals.workspace;
+        const existingChat = await WorkspaceChats.get({
+          workspaceId: workspace.id,
+          thread_id: null,
+          user_id: user?.id,
+          id: Number(chatId),
+        });
+        if (!existingChat) throw new Error("Invalid chat.");
+
+        const chatResponse = safeJsonParse(existingChat.response, null);
+        if (!chatResponse) throw new Error("Failed to parse chat response");
+
+        await WorkspaceChats._update(existingChat.id, {
+          response: JSON.stringify({
+            ...chatResponse,
+            text: String(newText),
+          }),
+        });
+
+        response.sendStatus(200).end();
+      } catch (e) {
+        console.error(e.message, e);
         response.sendStatus(500).end();
       }
     }
@@ -476,6 +586,48 @@ function workspaceEndpoints(app) {
   );
 
   app.get(
+    "/workspace/:slug/tts/:chatId",
+    [validatedRequest, flexUserRoleValid([ROLES.all]), validWorkspaceSlug],
+    async function (request, response) {
+      try {
+        const { chatId } = request.params;
+        const workspace = response.locals.workspace;
+        const cacheKey = `${workspace.slug}:${chatId}`;
+        const wsChat = await WorkspaceChats.get({
+          id: Number(chatId),
+          workspaceId: workspace.id,
+        });
+
+        const cachedResponse = responseCache.get(cacheKey);
+        if (cachedResponse) {
+          response.writeHead(200, {
+            "Content-Type": cachedResponse.mime || "audio/mpeg",
+          });
+          response.end(cachedResponse.buffer);
+          return;
+        }
+
+        const text = safeJsonParse(wsChat.response, null)?.text;
+        if (!text) return response.sendStatus(204).end();
+
+        const TTSProvider = getTTSProvider();
+        const buffer = await TTSProvider.ttsBuffer(text);
+        if (buffer === null) return response.sendStatus(204).end();
+
+        responseCache.set(cacheKey, { buffer, mime: "audio/mpeg" });
+        response.writeHead(200, {
+          "Content-Type": "audio/mpeg",
+        });
+        response.end(buffer);
+        return;
+      } catch (error) {
+        console.error("Error processing the TTS request:", error);
+        response.status(500).json({ message: "TTS could not be completed" });
+      }
+    }
+  );
+
+  app.get(
     "/workspace/:slug/pfp",
     [validatedRequest, flexUserRoleValid([ROLES.all])],
     async function (request, response) {
@@ -539,13 +691,13 @@ function workspaceEndpoints(app) {
 
         const oldPfpFilename = workspaceRecord.pfpFilename;
         if (oldPfpFilename) {
+          const storagePath = path.join(__dirname, "../storage/assets/pfp");
           const oldPfpPath = path.join(
-            __dirname,
-            `../storage/assets/pfp/${normalizePath(
-              workspaceRecord.pfpFilename
-            )}`
+            storagePath,
+            normalizePath(workspaceRecord.pfpFilename)
           );
-
+          if (!isWithin(path.resolve(storagePath), path.resolve(oldPfpPath)))
+            throw new Error("Invalid path name");
           if (fs.existsSync(oldPfpPath)) fs.unlinkSync(oldPfpPath);
         }
 
@@ -580,11 +732,13 @@ function workspaceEndpoints(app) {
         const oldPfpFilename = workspaceRecord.pfpFilename;
 
         if (oldPfpFilename) {
+          const storagePath = path.join(__dirname, "../storage/assets/pfp");
           const oldPfpPath = path.join(
-            __dirname,
-            `../storage/assets/pfp/${normalizePath(oldPfpFilename)}`
+            storagePath,
+            normalizePath(oldPfpFilename)
           );
-
+          if (!isWithin(path.resolve(storagePath), path.resolve(oldPfpPath)))
+            throw new Error("Invalid path name");
           if (fs.existsSync(oldPfpPath)) fs.unlinkSync(oldPfpPath);
         }
 
@@ -606,6 +760,106 @@ function workspaceEndpoints(app) {
       } catch (error) {
         console.error("Error processing the profile picture removal:", error);
         response.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  app.post(
+    "/workspace/:slug/thread/fork",
+    [validatedRequest, flexUserRoleValid([ROLES.all]), validWorkspaceSlug],
+    async (request, response) => {
+      try {
+        const user = await userFromSession(request, response);
+        const workspace = response.locals.workspace;
+        const { chatId, threadSlug } = reqBody(request);
+        if (!chatId)
+          return response.status(400).json({ message: "chatId is required" });
+
+        // Get threadId we are branching from if that request body is sent
+        // and is a valid thread slug.
+        const threadId = !!threadSlug
+          ? (
+              await WorkspaceThread.get({
+                slug: String(threadSlug),
+                workspace_id: workspace.id,
+              })
+            )?.id ?? null
+          : null;
+        const chatsToFork = await WorkspaceChats.where(
+          {
+            workspaceId: workspace.id,
+            user_id: user?.id,
+            include: true, // only duplicate visible chats
+            thread_id: threadId,
+            id: { lte: Number(chatId) },
+          },
+          null,
+          { id: "asc" }
+        );
+
+        const { thread: newThread, message: threadError } =
+          await WorkspaceThread.new(workspace, user?.id);
+        if (threadError)
+          return response.status(500).json({ error: threadError });
+
+        let lastMessageText = "";
+        const chatsData = chatsToFork.map((chat) => {
+          const chatResponse = safeJsonParse(chat.response, {});
+          if (chatResponse?.text) lastMessageText = chatResponse.text;
+
+          return {
+            workspaceId: workspace.id,
+            prompt: chat.prompt,
+            response: JSON.stringify(chatResponse),
+            user_id: user?.id,
+            thread_id: newThread.id,
+          };
+        });
+        await WorkspaceChats.bulkCreate(chatsData);
+        await WorkspaceThread.update(newThread, {
+          name: !!lastMessageText
+            ? truncate(lastMessageText, 22)
+            : "Forked Thread",
+        });
+
+        await Telemetry.sendTelemetry("thread_forked");
+        await EventLogs.logEvent(
+          "thread_forked",
+          {
+            workspaceName: workspace?.name || "Unknown Workspace",
+            threadName: newThread.name,
+          },
+          user?.id
+        );
+        response.status(200).json({ newThreadSlug: newThread.slug });
+      } catch (e) {
+        console.error(e.message, e);
+        response.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  app.put(
+    "/workspace/workspace-chats/:id",
+    [validatedRequest, flexUserRoleValid([ROLES.all])],
+    async (request, response) => {
+      try {
+        const { id } = request.params;
+        const user = await userFromSession(request, response);
+        const validChat = await WorkspaceChats.get({
+          id: Number(id),
+          user_id: user?.id ?? null,
+        });
+        if (!validChat)
+          return response
+            .status(404)
+            .json({ success: false, error: "Chat not found." });
+
+        await WorkspaceChats._update(validChat.id, { include: false });
+        response.json({ success: true, error: null });
+      } catch (e) {
+        console.error(e.message, e);
+        response.status(500).json({ success: false, error: "Server error" });
       }
     }
   );

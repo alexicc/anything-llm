@@ -1,4 +1,4 @@
-const { AzureOpenAiEmbedder } = require("../../EmbeddingEngines/azureOpenAi");
+const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   writeResponseChunk,
   clientAbortedHandler,
@@ -23,11 +23,7 @@ class AzureOpenAiLLM {
       user: this.promptWindowLimit() * 0.7,
     };
 
-    if (!embedder)
-      console.warn(
-        "No embedding provider defined for AzureOpenAiLLM - falling back to AzureOpenAiEmbedder for embedding!"
-      );
-    this.embedder = !embedder ? new AzureOpenAiEmbedder() : embedder;
+    this.embedder = embedder ?? new NativeEmbedder();
     this.defaultTemp = 0.7;
   }
 
@@ -74,11 +70,6 @@ class AzureOpenAiLLM {
       content: `${systemPrompt}${this.#appendContext(contextTexts)}`,
     };
     return [prompt, ...chatHistory, { role: "user", content: userPrompt }];
-  }
-
-  async isSafe(_input = "") {
-    // Not implemented by Azure OpenAI so must be stubbed
-    return { safe: true, reasons: [] };
   }
 
   async getChatCompletion(messages = [], { temperature = 0.7 }) {

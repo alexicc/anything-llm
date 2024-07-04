@@ -29,23 +29,10 @@ async function streamChatWithForEmbed(
 
   const uuid = uuidv4();
   const LLMConnector = getLLMProvider({
+    provider: embed?.workspace?.chatProvider,
     model: chatModel ?? embed.workspace?.chatModel,
   });
   const VectorDb = getVectorDbClass();
-  const { safe, reasons = [] } = await LLMConnector.isSafe(message);
-  if (!safe) {
-    writeResponseChunk(response, {
-      id: uuid,
-      type: "abort",
-      textResponse: null,
-      sources: [],
-      close: true,
-      error: `This message was moderated and will not be allowed. Violations for ${reasons.join(
-        ", "
-      )} found.`,
-    });
-    return;
-  }
 
   const messageLimit = 20;
   const hasVectorizedSpace = await VectorDb.hasNamespace(embed.workspace.slug);

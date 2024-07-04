@@ -3,6 +3,7 @@ const {
   writeResponseChunk,
   clientAbortedHandler,
 } = require("../../helpers/chat/responses");
+const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 
 class AnthropicLLM {
   constructor(embedder = null, modelPreference = null) {
@@ -23,11 +24,7 @@ class AnthropicLLM {
       user: this.promptWindowLimit() * 0.7,
     };
 
-    if (!embedder)
-      throw new Error(
-        "INVALID ANTHROPIC SETUP. No embedding engine has been set. Go to instance settings and set up an embedding interface to use Anthropic as your LLM."
-      );
-    this.embedder = embedder;
+    this.embedder = embedder ?? new NativeEmbedder();
     this.defaultTemp = 0.7;
   }
 
@@ -49,6 +46,8 @@ class AnthropicLLM {
         return 200_000;
       case "claude-3-haiku-20240307":
         return 200_000;
+      case "claude-3-5-sonnet-20240620":
+        return 200_000;
       default:
         return 100_000; // assume a claude-instant-1.2 model
     }
@@ -62,15 +61,9 @@ class AnthropicLLM {
       "claude-3-opus-20240229",
       "claude-3-sonnet-20240229",
       "claude-3-haiku-20240307",
+      "claude-3-5-sonnet-20240620",
     ];
     return validModels.includes(modelName);
-  }
-
-  // Moderation can be done with Anthropic, but its not really "exact" so we skip it
-  // https://docs.anthropic.com/claude/docs/content-moderation
-  async isSafe(_input = "") {
-    // Not implemented so must be stubbed
-    return { safe: true, reasons: [] };
   }
 
   constructPrompt({

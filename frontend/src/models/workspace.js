@@ -74,6 +74,42 @@ const Workspace = {
       .catch(() => false);
     return result;
   },
+
+  deleteChats: async function (slug = "", chatIds = []) {
+    return await fetch(`${API_BASE}/workspace/${slug}/delete-chats`, {
+      method: "DELETE",
+      headers: baseHeaders(),
+      body: JSON.stringify({ chatIds }),
+    })
+      .then((res) => {
+        if (res.ok) return true;
+        throw new Error("Failed to delete chats.");
+      })
+      .catch((e) => {
+        console.log(e);
+        return false;
+      });
+  },
+  deleteEditedChats: async function (slug = "", threadSlug = "", startingId) {
+    if (!!threadSlug)
+      return this.threads._deleteEditedChats(slug, threadSlug, startingId);
+    return this._deleteEditedChats(slug, startingId);
+  },
+  updateChatResponse: async function (
+    slug = "",
+    threadSlug = "",
+    chatId,
+    newText
+  ) {
+    if (!!threadSlug)
+      return this.threads._updateChatResponse(
+        slug,
+        threadSlug,
+        chatId,
+        newText
+      );
+    return this._updateChatResponse(slug, chatId, newText);
+  },
   streamChat: async function ({ slug }, message, handleChat) {
     const ctrl = new AbortController();
 
@@ -256,8 +292,21 @@ const Workspace = {
         return false;
       });
   },
-  threads: WorkspaceThread,
-
+  ttsMessage: async function (slug, chatId) {
+    return await fetch(`${API_BASE}/workspace/${slug}/tts/${chatId}`, {
+      method: "GET",
+      cache: "no-cache",
+      headers: baseHeaders(),
+    })
+      .then((res) => {
+        if (res.ok && res.status !== 204) return res.blob();
+        throw new Error("Failed to fetch TTS.");
+      })
+      .then((blob) => (blob ? URL.createObjectURL(blob) : null))
+      .catch((e) => {
+        return null;
+      });
+  },
   uploadPfp: async function (formData, slug) {
     return await fetch(`${API_BASE}/workspace/${slug}/upload-pfp`, {
       method: "POST",
@@ -286,7 +335,7 @@ const Workspace = {
       })
       .then((blob) => (blob ? URL.createObjectURL(blob) : null))
       .catch((e) => {
-        console.log(e);
+        // console.log(e);
         return null;
       });
   },
@@ -305,6 +354,64 @@ const Workspace = {
         return { success: false, error: e.message };
       });
   },
+  _updateChatResponse: async function (slug = "", chatId, newText) {
+    return await fetch(`${API_BASE}/workspace/${slug}/update-chat`, {
+      method: "POST",
+      headers: baseHeaders(),
+      body: JSON.stringify({ chatId, newText }),
+    })
+      .then((res) => {
+        if (res.ok) return true;
+        throw new Error("Failed to update chat.");
+      })
+      .catch((e) => {
+        console.log(e);
+        return false;
+      });
+  },
+  _deleteEditedChats: async function (slug = "", startingId) {
+    return await fetch(`${API_BASE}/workspace/${slug}/delete-edited-chats`, {
+      method: "DELETE",
+      headers: baseHeaders(),
+      body: JSON.stringify({ startingId }),
+    })
+      .then((res) => {
+        if (res.ok) return true;
+        throw new Error("Failed to delete chats.");
+      })
+      .catch((e) => {
+        console.log(e);
+        return false;
+      });
+  },
+  deleteChat: async (chatId) => {
+    return await fetch(`${API_BASE}/workspace/workspace-chats/${chatId}`, {
+      method: "PUT",
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .catch((e) => {
+        console.error(e);
+        return { success: false, error: e.message };
+      });
+  },
+  forkThread: async function (slug = "", threadSlug = null, chatId = null) {
+    return await fetch(`${API_BASE}/workspace/${slug}/thread/fork`, {
+      method: "POST",
+      headers: baseHeaders(),
+      body: JSON.stringify({ threadSlug, chatId }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to fork thread.");
+        return res.json();
+      })
+      .then((data) => data.newThreadSlug)
+      .catch((e) => {
+        console.error("Error forking thread:", e);
+        return null;
+      });
+  },
+  threads: WorkspaceThread,
 };
 
 export default Workspace;

@@ -26,11 +26,7 @@ class KoboldCPPLLM {
       user: this.promptWindowLimit() * 0.7,
     };
 
-    if (!embedder)
-      console.warn(
-        "No embedding provider defined for KoboldCPPLLM - falling back to NativeEmbedder for embedding!"
-      );
-    this.embedder = !embedder ? new NativeEmbedder() : embedder;
+    this.embedder = embedder ?? new NativeEmbedder();
     this.defaultTemp = 0.7;
     this.log(`Inference API: ${this.basePath} Model: ${this.model}`);
   }
@@ -83,11 +79,6 @@ class KoboldCPPLLM {
     return [prompt, ...chatHistory, { role: "user", content: userPrompt }];
   }
 
-  async isSafe(_input = "") {
-    // Not implemented so must be stubbed
-    return { safe: true, reasons: [] };
-  }
-
   async getChatCompletion(messages = null, { temperature = 0.7 }) {
     const result = await this.openai.chat.completions
       .create({
@@ -96,7 +87,7 @@ class KoboldCPPLLM {
         temperature,
       })
       .catch((e) => {
-        throw new Error(e.response.data.error.message);
+        throw new Error(e.message);
       });
 
     if (!result.hasOwnProperty("choices") || result.choices.length === 0)

@@ -87,9 +87,15 @@ REQUIRED data attributes:
 
 - `data-assistant-icon` - Set the icon of the chat assistant.
 
+- `data-window-height` - Set the chat window height. **must include CSS suffix:** `px`,`%`,`rem`
+
+- `data-window-width` - Set the chat window width. **must include CSS suffix:** `px`,`%`,`rem`
+
+- `data-text-size` - Set the text size of the chats in pixels.
+
 **Behavior Overrides**
 
-- `data-open-on-load` — Once loaded, open the chat as default. It can still be closed by the user.
+- `data-open-on-load` — Once loaded, open the chat as default. It can still be closed by the user. To enable set this attribute to `on`. All other values will be ignored.
 
 - `data-support-email` — Shows a support email that the user can used to draft an email via the "three dot" menu in the top right. Option will not appear if it is not set.
 
